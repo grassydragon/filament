@@ -17,13 +17,18 @@
 package com.google.android.filament.hellotriangle
 
 import android.animation.ValueAnimator
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.opengl.Matrix
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Choreographer
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceView
 import android.view.animation.LinearInterpolator
+import android.widget.TextView
 import com.google.android.filament.*
 import com.google.android.filament.RenderableManager.PrimitiveType
 import com.google.android.filament.VertexBuffer.AttributeType
@@ -48,6 +53,13 @@ class MainActivity : Activity() {
 
     // The View we want to render into
     private lateinit var surfaceView: SurfaceView
+
+    private lateinit var opaqueTextView: TextView
+
+    private lateinit var transparentTextView: TextView
+
+    private lateinit var statusTextView: TextView
+
     // UiHelper is provided by Filament to manage SurfaceView and SurfaceTexture
     private lateinit var uiHelper: UiHelper
     // DisplayHelper is provided by Filament to manage the display
@@ -68,12 +80,16 @@ class MainActivity : Activity() {
     // Should be pretty obvious :)
     private lateinit var camera: Camera
 
-    private lateinit var material: Material
+    private lateinit var opaqueMaterial: Material
+    private lateinit var transparentMaterial: Material
     private lateinit var vertexBuffer: VertexBuffer
     private lateinit var indexBuffer: IndexBuffer
 
     // Filament entity representing a renderable object
-    @Entity private var renderable = 0
+    @Entity private var opaqueRenderable = 0
+
+    // Filament entity representing a renderable object
+    @Entity private var transparentRenderable = 0
 
     // A swap chain is Filament's representation of a surface
     private var swapChain: SwapChain? = null
@@ -83,11 +99,31 @@ class MainActivity : Activity() {
 
     private val animator = ValueAnimator.ofFloat(0.0f, 360.0f)
 
+    private val pickingHandler = Handler(Looper.getMainLooper())
+
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        surfaceView = SurfaceView(this)
-        setContentView(surfaceView)
+        setContentView(R.layout.activity_main)
+
+        surfaceView = findViewById(R.id.surface_view)
+        opaqueTextView = findViewById(R.id.opaque_text_view)
+        transparentTextView = findViewById(R.id.transparent_text_view)
+        statusTextView = findViewById(R.id.status_text_view)
+
+        surfaceView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                val invertedY = surfaceView.height - 1 - event.y.toInt()
+                view.pick(event.x.toInt(), invertedY, pickingHandler) {
+                    statusTextView.text = "Picked renderable ID: ${it.renderable}"
+                }
+            }
+
+            true
+        }
+
+        statusTextView.text = "Picked renderable ID:"
 
         choreographer = Choreographer.getInstance()
 
@@ -130,11 +166,16 @@ class MainActivity : Activity() {
     }
 
     private fun setupScene() {
-        loadMaterial()
+        loadMaterials()
         createMesh()
 
+        val transformMatrix = FloatArray(16)
+        val tcm = engine.transformManager
+
         // To create a renderable we first create a generic entity
-        renderable = EntityManager.get().create()
+        opaqueRenderable = EntityManager.get().create()
+
+        opaqueTextView.text = "Opaque renderable ID: $opaqueRenderable"
 
         // We then create a renderable component on that entity
         // A renderable is made of several primitives; in this case we declare only 1
@@ -144,18 +185,51 @@ class MainActivity : Activity() {
                 // Sets the mesh data of the first primitive
                 .geometry(0, PrimitiveType.TRIANGLES, vertexBuffer, indexBuffer, 0, 3)
                 // Sets the material of the first primitive
-                .material(0, material.defaultInstance)
-                .build(engine, renderable)
+                .material(0, opaqueMaterial.defaultInstance)
+                .build(engine, opaqueRenderable)
 
         // Add the entity to the scene to render it
-        scene.addEntity(renderable)
+        scene.addEntity(opaqueRenderable)
 
-        startAnimation()
+        Matrix.setIdentityM(transformMatrix, 0)
+        Matrix.translateM(transformMatrix, 0, 0f, 1f, 0f)
+
+        tcm.setTransform(tcm.getInstance(opaqueRenderable), transformMatrix)
+
+        // To create a renderable we first create a generic entity
+        transparentRenderable = EntityManager.get().create()
+
+        transparentTextView.text = "Transparent renderable ID: $transparentRenderable"
+
+        // We then create a renderable component on that entity
+        // A renderable is made of several primitives; in this case we declare only 1
+        RenderableManager.Builder(1)
+            // Overall bounding box of the renderable
+            .boundingBox(Box(0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.01f))
+            // Sets the mesh data of the first primitive
+            .geometry(0, PrimitiveType.TRIANGLES, vertexBuffer, indexBuffer, 0, 3)
+            // Sets the material of the first primitive
+            .material(0, transparentMaterial.defaultInstance)
+            .build(engine, transparentRenderable)
+
+        // Add the entity to the scene to render it
+        scene.addEntity(transparentRenderable)
+
+        Matrix.setIdentityM(transformMatrix, 0)
+        Matrix.translateM(transformMatrix, 0, 0f, -1f, 0f)
+
+        tcm.setTransform(tcm.getInstance(transparentRenderable), transformMatrix)
+
+        // startAnimation()
     }
 
-    private fun loadMaterial() {
+    private fun loadMaterials() {
         readUncompressedAsset("materials/baked_color.filamat").let {
-            material = Material.Builder().payload(it, it.remaining()).build(engine)
+            opaqueMaterial = Material.Builder().payload(it, it.remaining()).build(engine)
+        }
+
+        readUncompressedAsset("materials/transparent.filamat").let {
+            transparentMaterial = Material.Builder().payload(it, it.remaining()).build(engine)
         }
     }
 
@@ -235,7 +309,7 @@ class MainActivity : Activity() {
             override fun onAnimationUpdate(a: ValueAnimator) {
                 Matrix.setRotateM(transformMatrix, 0, -(a.animatedValue as Float), 0.0f, 0.0f, 1.0f)
                 val tcm = engine.transformManager
-                tcm.setTransform(tcm.getInstance(renderable), transformMatrix)
+                tcm.setTransform(tcm.getInstance(opaqueRenderable), transformMatrix)
             }
         })
         animator.start()
@@ -264,11 +338,13 @@ class MainActivity : Activity() {
         uiHelper.detach()
 
         // Cleanup all resources
-        engine.destroyEntity(renderable)
+        engine.destroyEntity(opaqueRenderable)
+        engine.destroyEntity(transparentRenderable)
         engine.destroyRenderer(renderer)
         engine.destroyVertexBuffer(vertexBuffer)
         engine.destroyIndexBuffer(indexBuffer)
-        engine.destroyMaterial(material)
+        engine.destroyMaterial(opaqueMaterial)
+        engine.destroyMaterial(transparentMaterial)
         engine.destroyView(view)
         engine.destroyScene(scene)
         engine.destroyCameraComponent(camera.entity)
@@ -276,7 +352,8 @@ class MainActivity : Activity() {
         // Engine.destroyEntity() destroys Filament related resources only
         // (components), not the entity itself
         val entityManager = EntityManager.get()
-        entityManager.destroy(renderable)
+        entityManager.destroy(opaqueRenderable)
+        entityManager.destroy(transparentRenderable)
         entityManager.destroy(camera.entity)
 
         // Destroying the engine will free up any resource you may have forgotten
@@ -321,7 +398,7 @@ class MainActivity : Activity() {
         }
 
         override fun onResized(width: Int, height: Int) {
-            val zoom = 1.5
+            val zoom = 3.0
             val aspect = width.toDouble() / height.toDouble()
             camera.setProjection(Camera.Projection.ORTHO,
                     -aspect * zoom, aspect * zoom, -zoom, zoom, 0.0, 10.0)
